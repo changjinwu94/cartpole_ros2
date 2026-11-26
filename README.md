@@ -1,23 +1,46 @@
-# Cartpole position-target batch trials
+# ROS 2 cartpole swing-up on Raspberry Pi
 
-ROS 2 Humble on robot01 with a Faulhaber drive and Arduino sensor board.
-The batch compares 0.3044 and 0.3043 at a 0.83 energy trigger. Each trial
-prepares the hardware, captures a position reference, checks preflight, and
-runs the bounded swing-up. Launching the batch initiates physical motion.
+This repository runs position-target swing-up experiments on the physical cartpole at `robot01`. An Arduino UNO R4 Minima reads the pole encoder and endstops. A Raspberry Pi 4 running Ubuntu 22.04 hosts ROS 2 Humble in Docker and communicates with the Faulhaber motor controller over RS-232. The experiment measures how the final cart move changes the pole's approach to upright. The current runner stops on entry into a 12° upright window. Active balance and a five-second hold remain development goals.
 
-## Install on a commissioned host
+## Set up a checkout
 
-Use ~/cartpole_ros2 as the checkout path. Configure .env from .env.example
-with both actual serial device paths. On the existing robot use the known
-working .env. Build with docker compose build cartpole. Review the hardware
-configuration in cartpole_hardware/config/cartpole.yaml before commissioning.
+On a fresh host with Git, Python 3, Docker Engine and Docker Compose installed, clone the repository. Access to a private repository requires GitHub authentication.
 
-On a fresh host, link the bundled launchers with
-`ln -sT "$HOME/cartpole_ros2/cartpole_batch" "$HOME/cartpole_batch"`.
-An existing installation may already have this directory. Keep the known-working
-copy or back it up before replacing it with the link.
+```bash
+git clone https://github.com/changjinwu94/cartpole_ros2.git ~/cartpole_ros2
+cd ~/cartpole_ros2
+```
 
-Run `bash ~/cartpole_batch/cartpole_collect_pairs.sh 5` on robot01.
-Results are written under logs/final_push_pairs.*. The runner stops at upright
-entry. Run offline runner tests with
-`python3 -m unittest discover -s experiments/cartpole_position_energy_v4`.
+For an existing checkout, start in its directory. On the development Pi this is `~/cartpole_repo_upload`. Select it explicitly so the trial runner and collector use the same source, configuration and logs.
+
+```bash
+export CARTPOLE_REPO="$PWD"
+ls -l /dev/serial/by-id/
+test -f .env || cp .env.example .env
+nano .env
+```
+
+Set `ARDUINO_DEVICE` and `MOTOR_DEVICE` to their persistent device paths. Review the installed geometry, encoder direction and drive profile before using another rig. The supplied configuration enables motor communication. Keep a single Compose project in control of the serial devices.
+
+## Build and check offline
+
+```bash
+docker compose config -q
+docker compose build cartpole
+python3 -m unittest discover -s experiments/cartpole_position_energy_v4 -q
+```
+
+The unit tests use fake hardware. Building the image and running these tests require no cart motion. For a live test, follow the [operator guide](docs/OPERATIONS.md). For comparison across trials, see [recordings and metrics](docs/DATA.md).
+
+## Repository layout
+
+| Path | Purpose |
+|---|---|
+| `cartpole_batch/` | Host launchers for one trial or repeated A/B pairs |
+| `tools/cartpole-workflow.sh`, `tools/lqr/` | ROS-based preparation, centering and preflight |
+| `experiments/cartpole_position_energy_v4/` | Standalone position controller, encoder processing, serial I/O and tests |
+| `cartpole_hardware/` | ROS hardware node, configuration and launch file |
+| `firmware/cartpole_sensors/` | Arduino encoder and endstop firmware |
+| `logs/` | Local recordings, captured references and batch results |
+
+Distributed under the [MIT License](LICENSE).
