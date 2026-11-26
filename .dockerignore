@@ -1,0 +1,14 @@
+.git
+__pycache__
+.pytest_cache
+tests
+upload
+# cartpole consolidation exclusions
+archive/
+envs/
+experiments/
+logs/
+tools/legacy/
+
+.env
+.final_push_collection.lock

@@ -1,0 +1,33 @@
+/**:
+  ros__parameters:
+    arduino_port: /dev/cartpole_arduino
+    motor_port: /dev/cartpole_motor
+    arduino_baud: 115200
+    motor_baud: 115200
+    serial_timeout_s: 0.1
+    motor_connected: true  # Stage 1: sensors only; RS232 is not opened.
+    hardware_configured: true
+    motor_counts_per_rev: 3000  # Datasheet nominal; VERIFY POS units on your firmware.
+    pulley_circumference_m: 0.04  # PLACEHOLDER: belt pitch * pulley teeth, in metres.
+    motor_revs_per_pulley_rev: 9.7  # Gear reduction, motor revolutions / pulley revolution.
+    motor_sign: 1  # + cart velocity must move RIGHT, away from left home switch.
+    pole_sign: 1  # Verify experimentally with chosen angle convention.
+    pole_ppr: 500  # PLACEHOLDER: label P/R, firmware performs x4 decoding.
+    track_length_m: 0.147
+    soft_margin_m: 0.0135
+    stop_margin_m: 0.005
+    max_velocity_m_s: 0.1
+    max_motor_rpm: 1500.0
+    braking_deceleration_m_s2: 0.1  # Must be a measured conservative braking value.
+    max_acceleration_m_s2: 1.0
+    home_velocity_m_s: 0.01
+    home_timeout_s: 120.0
+    sensor_timeout_s: 0.1
+    command_timeout_s: 0.25
+    loop_hz: 50.0
+    balance_enabled: false
+    balance_gains: [0.0, 0.0, 0.0, 0.0]  # v_cmd=-K*[x-x_target, x_dot, theta, theta_dot].
+    balance_angle_limit_rad: 0.25
+    target_position_m: 0.0735
+    stop_timeout_s: 1.0
+    stationary_rpm: 5.0  # Confirm sensor resolution/deadband before relying on this.

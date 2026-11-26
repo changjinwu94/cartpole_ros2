@@ -1,0 +1,5 @@
+# Stage 2 only: motor_connected=true still leaves motion gated by hardware_configured.
+services:
+  cartpole:
+    devices:
+      - ${MOTOR_DEVICE:?Set MOTOR_DEVICE in .env}:/dev/cartpole_motor

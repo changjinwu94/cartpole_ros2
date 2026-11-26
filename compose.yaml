@@ -1,0 +1,16 @@
+services:
+  cartpole:
+    build: .
+    init: true
+    network_mode: host
+    environment:
+      ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+      ROS_LOCALHOST_ONLY: ${ROS_LOCALHOST_ONLY:-1}
+    devices:
+      - ${ARDUINO_DEVICE:?Set ARDUINO_DEVICE in .env}:/dev/cartpole_arduino
+      - ${MOTOR_DEVICE:?Set MOTOR_DEVICE in .env}:/dev/cartpole_motor
+    volumes:
+      - ./cartpole_hardware/config:/config:ro
+      - ./logs:/logs
+    stop_grace_period: 5s
+    restart: "no"

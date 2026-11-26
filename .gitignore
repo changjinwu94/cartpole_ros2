@@ -1,0 +1,6 @@
+.env
+logs/*
+!logs/.gitkeep
+__pycache__/
+*.pyc
+.final_push_collection.lock

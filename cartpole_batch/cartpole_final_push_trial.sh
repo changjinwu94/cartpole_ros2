@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Run one supervised, swing-up-only position-target trial on robot01.
+set -euo pipefail
+
+usage() {
+    cat <<'HELP'
+Usage: bash cartpole_final_push_trial.sh [FRACTION [ENERGY_TRIGGER [SECONDS]]]
+Defaults: 0.32 0.83 8
+Example: bash cartpole_final_push_trial.sh 0.36 0.83 8
+Repository: ~/cartpole_ros2 (override with CARTPOLE_REPO).
+HELP
+}
+
+if [[ ${1:-} == --help || ${1:-} == -h ]]; then usage; exit 0; fi
+if (( $# > 3 )); then usage >&2; exit 2; fi
+fraction=${1:-0.32}
+energy=${2:-0.83}
+duration=${3:-8}
+[[ $(hostname -s) == robot01 ]] || { echo 'Run on the robot01 host.' >&2; exit 2; }
+[[ ${CARTPOLE_BATCH:-0} == 1 || ( -t 0 && -t 1 ) ]] || { echo 'Run in an interactive terminal at the rig or with the operator present.' >&2; exit 2; }
+
+cd "${CARTPOLE_REPO:-$HOME/cartpole_ros2}"
+runner="$PWD/experiments/cartpole_position_energy_v4"
+trial=$(mktemp -d /tmp/cartpole-final-push.XXXXXX)
+restart_service=0
+cleanup() {
+    local result=$?
+    trap - EXIT
+    rm -rf -- "$trial"
+    if (( restart_service && result == 0 )); then
+        docker compose up -d cartpole || result=$?
+    fi
+    if (( restart_service && result != 0 )); then
+        echo 'Check the runner summary and confirm the cart has stopped before restoring ROS.' >&2
+        echo 'To restore ROS on the host, run docker compose up -d cartpole.' >&2
+    fi
+    exit "$result"
+}
+trap cleanup EXIT
+
+cp "$runner"/*.py "$trial/"
+python3 - "$trial/run_position.py" "$fraction" "$energy" "$duration" <<'PY'
+import math
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    fraction, energy, duration = map(float, sys.argv[2:])
+except ValueError:
+    raise SystemExit("All trial parameters must be numbers.")
+for name, value, maximum in (
+    ("fraction", fraction, 1.0),
+    ("energy trigger", energy, 1.0),
+    ("duration", duration, 20.0),
+):
+    if not math.isfinite(value) or not 0 < value <= maximum:
+        raise SystemExit(f"{name} must be > 0 and <= {maximum}.")
+source = path.read_text()
+if "'final-push'" not in source:
+    raise SystemExit("Install the final-push patch first.")
+for constant, value in (("FINAL_PUSH_FRACTION", fraction), ("FINAL_PUSH_ENERGY", energy)):
+    source, count = re.subn(rf"^{constant}\s*=\s*[^\r\n]+$", f"{constant} = {value!r}", source, flags=re.M)
+    if count != 1:
+        raise SystemExit(f"Expected one assignment for {constant}.")
+compile(source, str(path), "exec")
+path.write_text(source)
+PY
+
+# Let the container read the staged source even if it runs as a different UID.
+chmod 755 "$trial"
+chmod a+r "$trial"/*.py
+printf 'Final push fraction %s, energy trigger %s, timeout %s s\n' "$fraction" "$energy" "$duration"
+compose_input=()
+if [[ ${CARTPOLE_BATCH:-0} == 1 ]]; then
+    compose_input=(-T)
+else
+    echo 'Preparation moves the cart. Verify the pole is hanging and the operator has the cutoff.'
+    read -r -p 'Type prepare to start preparation: ' approval
+    [[ $approval == prepare ]] || { echo 'Cancelled.'; exit 0; }
+fi
+
+docker compose up -d cartpole
+bash tools/cartpole-workflow.sh prepare --pole-down
+docker compose cp "$trial/capture_reference.py" cartpole:/tmp/capture_reference.py
+docker compose exec -T cartpole bash -lc \
+    'source /opt/ros/humble/setup.bash && python3 /tmp/capture_reference.py'
+docker compose stop cartpole
+restart_service=1
+
+docker compose run --rm --no-deps "${compose_input[@]}" \
+    --entrypoint /bin/bash \
+    -v "$trial:/profile_test:ro" \
+    -v "$PWD/logs:/logs" \
+    cartpole -ec '
+        cd /profile_test
+        python3 run_position.py --check-only --pole-down --policy final-push --duration "$1"
+        if [[ $2 != 1 ]]; then
+        echo "Confirm the rig is clear. The reference expires 120 s after capture."
+        read -r -p "Type run now to execute one trial: " approval
+        if [[ $approval != "run now" ]]; then
+            echo "Trial cancelled."
+            exit 0
+        fi
+        fi
+        exec python3 run_position.py --execute --pole-down --policy final-push --duration "$1"
+    ' cartpole-trial "$duration" "${CARTPOLE_BATCH:-0}"
