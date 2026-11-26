@@ -24,10 +24,14 @@ class DownCrossings:
 class PhasePolicy:
     def __init__(self,start_ns):
         self.start=start_ns;self.last_command=None;self.last_target=None;self.last_cross=start_ns
+    def begin_stroke(self, now_ns, direction, reason):
+        self.last_command = now_ns
+        self.last_target = direction
+        return direction, reason
+
     def choose(self,now_ns,crossings):
         if self.last_command is None:
-            self.last_command=now_ns;self.last_target=1
-            return 1,'initial_bounded_nudge'
+            return self.begin_stroke(now_ns, 1, 'initial_bounded_nudge')
         direction=None
         for crossing in crossings:
             if now_ns-crossing['at_ns']>30_000_000:raise RuntimeError('Down-crossing delivery >30ms')
@@ -39,5 +43,4 @@ class PhasePolicy:
             direction=crossing['direction']
         if now_ns-self.last_cross>2_000_000_000:raise RuntimeError('No down-crossing for2s; pole stalled')
         if direction is None:return None,'waiting_for_down_crossing'
-        self.last_command=now_ns;self.last_target=direction
-        return direction,'down_crossing'
+        return self.begin_stroke(now_ns, direction, 'down_crossing')

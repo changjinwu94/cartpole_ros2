@@ -1,31 +1,48 @@
 #!/usr/bin/env bash
-# Run one supervised, swing-up-only position-target trial on robot01.
+# Run a single bounded position or velocity swing-up trial on robot01.
 set -euo pipefail
 
 usage() {
     cat <<'HELP'
 Usage: bash cartpole_final_push_trial.sh [FRACTION [ENERGY_TRIGGER [SECONDS]]]
-Defaults: 0.32 0.83 8
-Example: bash cartpole_final_push_trial.sh 0.36 0.83 8
-Repository: ~/cartpole_ros2 (override with CARTPOLE_REPO).
+       bash cartpole_final_push_trial.sh --velocity [--check-only] [FRACTION [ENERGY_TRIGGER [SECONDS [SPEED_M_S [ACCEL_M_S2]]]]]
+Defaults: fraction 0.32, energy 0.83, duration 8 s; velocity cap 0.275 m/s, acceleration 3.5 m/s^2.
+--velocity --check-only reads the running node and a fresh prepared reference without moving the cart.
+Runs use the adjacent checkout, or CARTPOLE_REPO when set. See docs/VELOCITY_SWING.md.
 HELP
 }
 
 if [[ ${1:-} == --help || ${1:-} == -h ]]; then usage; exit 0; fi
-if (( $# > 3 )); then usage >&2; exit 2; fi
+velocity=0
+check_only=0
+if [[ ${1:-} == --velocity ]]; then
+    velocity=1
+    shift
+    if [[ ${1:-} == --check-only ]]; then check_only=1; shift; fi
+fi
+if (( $# > 3 + 2 * velocity )); then usage >&2; exit 2; fi
 fraction=${1:-0.32}
 energy=${2:-0.83}
 duration=${3:-8}
 [[ $(hostname -s) == robot01 ]] || { echo 'Run on the robot01 host.' >&2; exit 2; }
-[[ ${CARTPOLE_BATCH:-0} == 1 || ( -t 0 && -t 1 ) ]] || { echo 'Run in an interactive terminal at the rig or with the operator present.' >&2; exit 2; }
+[[ $check_only == 1 || ${CARTPOLE_BATCH:-0} == 1 || ( -t 0 && -t 1 ) ]] || { echo 'Run in an interactive terminal at the rig or with the operator present.' >&2; exit 2; }
 
-cd "${CARTPOLE_REPO:-$HOME/cartpole_ros2}"
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+default_repo=$HOME/cartpole_ros2
+if [[ -d $script_dir/../experiments/cartpole_position_energy_v4 ]]; then default_repo=$script_dir/..; fi
+cd "${CARTPOLE_REPO:-$default_repo}"
+exec 8>"${XDG_RUNTIME_DIR:-/tmp}/cartpole-swing-$(id -u).lock"
+flock -n 8 || { echo 'Another swing trial owns this rig.' >&2; exit 1; }
 runner="$PWD/experiments/cartpole_position_energy_v4"
 trial=$(mktemp -d /tmp/cartpole-final-push.XXXXXX)
 restart_service=0
+remote_stage=''
 cleanup() {
     local result=$?
     trap - EXIT
+    if [[ -n $remote_stage ]]; then
+        docker compose exec -T cartpole rm -rf -- "$remote_stage" || true
+    fi
     rm -rf -- "$trial"
     if (( restart_service && result == 0 )); then
         docker compose up -d cartpole || result=$?
@@ -39,6 +56,12 @@ cleanup() {
 trap cleanup EXIT
 
 cp "$runner"/*.py "$trial/"
+if (( velocity )); then
+    velocity_args=(--fraction "$fraction" --energy "$energy" --duration "$duration"
+                   --speed "${4:-0.275}" --acceleration "${5:-3.5}")
+    # Validate all arguments locally before preparation can move anything.
+    python3 "$trial/run_velocity.py" "${velocity_args[@]}"
+else
 python3 - "$trial/run_position.py" "$fraction" "$energy" "$duration" <<'PY'
 import math
 import re
@@ -67,13 +90,14 @@ for constant, value in (("FINAL_PUSH_FRACTION", fraction), ("FINAL_PUSH_ENERGY",
 compile(source, str(path), "exec")
 path.write_text(source)
 PY
+fi
 
 # Let the container read the staged source even if it runs as a different UID.
 chmod 755 "$trial"
 chmod a+r "$trial"/*.py
 printf 'Final push fraction %s, energy trigger %s, timeout %s s\n' "$fraction" "$energy" "$duration"
 compose_input=()
-if [[ ${CARTPOLE_BATCH:-0} == 1 ]]; then
+if [[ ${CARTPOLE_BATCH:-0} == 1 || $check_only == 1 ]]; then
     compose_input=(-T)
 else
     echo 'Preparation moves the cart. Verify the pole is hanging and the operator has the cutoff.'
@@ -81,11 +105,30 @@ else
     [[ $approval == prepare ]] || { echo 'Cancelled.'; exit 0; }
 fi
 
-docker compose up -d cartpole
-bash tools/cartpole-workflow.sh prepare --pole-down
-docker compose cp "$trial/capture_reference.py" cartpole:/tmp/capture_reference.py
-docker compose exec -T cartpole bash -lc \
-    'source /opt/ros/humble/setup.bash && python3 /tmp/capture_reference.py'
+if (( ! check_only )); then
+    docker compose up -d cartpole
+    bash tools/cartpole-workflow.sh prepare --pole-down
+    docker compose cp "$trial/capture_reference.py" cartpole:/tmp/capture_reference.py
+    docker compose exec -T cartpole bash -lc \
+        'source /opt/ros/humble/setup.bash && python3 /tmp/capture_reference.py'
+fi
+
+if (( velocity )); then
+    remote_stage=$(docker compose exec -T cartpole mktemp -d /tmp/cartpole-velocity.XXXXXX)
+    [[ $remote_stage =~ ^/tmp/cartpole-velocity\.[[:alnum:]]{6}$ ]] || { remote_stage=''; exit 1; }
+    docker compose cp "$trial/." "cartpole:$remote_stage/"
+    ros_runner=(docker compose exec -T cartpole bash -lc
+        'source /opt/ros/humble/setup.bash && exec python3 "$@"' velocity-trial
+        "$remote_stage/run_velocity.py" --pole-down "${velocity_args[@]}")
+    "${ros_runner[@]}" --check-only
+    if (( check_only )); then exit 0; fi
+    if [[ ${CARTPOLE_BATCH:-0} != 1 ]]; then
+        read -r -p 'Type run now to execute one velocity trial: ' approval
+        [[ $approval == "run now" ]] || { echo 'Trial cancelled.'; exit 0; }
+    fi
+    "${ros_runner[@]}" --execute
+    exit 0
+fi
 docker compose stop cartpole
 restart_service=1
 

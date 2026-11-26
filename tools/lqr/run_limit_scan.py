@@ -114,12 +114,16 @@ def main():
                else v.double_value if v.type==3 else None) for k,v in zip(keys,values)}
         if any(v is None for v in p.values()):raise RuntimeError('Unexpected parameter types')
         record('parameters',p)
-        if (abs(p['max_velocity_m_s']-.10)>1e-8 or abs(p['max_acceleration_m_s2']-1.0)>1e-8
-            or not 1455<=p['max_motor_rpm']<=1500 or p['balance_enabled']
+        # Accept the swing profile in read-only preflight. Preserve the
+        # commissioned profile requirement for legacy powered pulse scans.
+        speed, acceleration, braking = (.275, 3.5, 3.5) if args.check_only else (.10, 1.0, .1)
+        rpm_min, rpm_max = (4000, 4000) if args.check_only else (1455, 1500)
+        if (abs(p['max_velocity_m_s']-speed)>1e-8 or abs(p['max_acceleration_m_s2']-acceleration)>1e-8
+            or not rpm_min<=p['max_motor_rpm']<=rpm_max or p['balance_enabled']
             or abs(p['track_length_m']-.147)>1e-6 or abs(p['soft_margin_m']-.0135)>1e-6
             or abs(p['motor_revs_per_pulley_rev']-9.7)>1e-6
             or abs(p['pulley_circumference_m']-.04)>1e-6
-            or abs(p['braking_deceleration_m_s2']-.1)>1e-8
+            or abs(p['braking_deceleration_m_s2']-braking)>1e-8
             or abs(p['stop_margin_m']-.005)>1e-8
             or abs(p['loop_hz']-50)>1e-6 or not 0 < p['home_velocity_m_s'] <= .01001):
             raise RuntimeError('Parameters do not match reviewed pulse-test setup: '+str(p))

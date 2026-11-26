@@ -16,10 +16,10 @@
     track_length_m: 0.147
     soft_margin_m: 0.0135
     stop_margin_m: 0.005
-    max_velocity_m_s: 0.1
-    max_motor_rpm: 1500.0
-    braking_deceleration_m_s2: 0.1  # Must be a measured conservative braking value.
-    max_acceleration_m_s2: 1.0
+    max_velocity_m_s: 0.275
+    max_motor_rpm: 4000.0
+    braking_deceleration_m_s2: 3.5  # Must be a measured conservative braking value.
+    max_acceleration_m_s2: 3.5
     home_velocity_m_s: 0.01
     home_timeout_s: 120.0
     sensor_timeout_s: 0.1

@@ -68,8 +68,8 @@ def main():
         c=node.create_client(GetParameters,'/cartpole/cartpole/get_parameters')
         if not c.wait_for_service(timeout_sec=5):raise RuntimeError('Parameter service unavailable')
         expected={'track_length_m':.147,'soft_margin_m':.0135,'stop_margin_m':.005,
-                  'max_velocity_m_s':.1,'max_acceleration_m_s2':1.,'max_motor_rpm':1500.,
-                  'braking_deceleration_m_s2':.1,'loop_hz':50.,'home_velocity_m_s':.01,
+                  'max_velocity_m_s':.275,'max_acceleration_m_s2':3.5,'max_motor_rpm':4000.,
+                  'braking_deceleration_m_s2':3.5,'loop_hz':50.,'home_velocity_m_s':.01,
                   'balance_enabled':False}
         f=c.call_async(GetParameters.Request(names=list(expected)))
         rclpy.spin_until_future_complete(node,f,timeout_sec=5)

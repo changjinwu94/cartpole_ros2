@@ -19,7 +19,7 @@ serial = types.ModuleType('serial')
 serial.Serial = object
 sys.modules['serial'] = serial
 for module in ('rclpy', 'rclpy.node', 'rclpy.qos', 'sensor_msgs', 'sensor_msgs.msg',
-               'std_msgs', 'std_msgs.msg', 'std_srvs', 'std_srvs.srv'):
+               'std_msgs', 'std_msgs.msg', 'std_srvs', 'std_srvs.srv', 'rcl_interfaces', 'rcl_interfaces.msg'):
     sys.modules[module] = types.ModuleType(module)
 sys.modules['rclpy.node'].Node = object
 sys.modules['rclpy.qos'].qos_profile_sensor_data = object()
@@ -28,10 +28,11 @@ class Message:
         self.header = types.SimpleNamespace(stamp=None)
         self.__dict__.update(kw)
 for module, names in [('sensor_msgs.msg', ['JointState']), ('std_msgs.msg', ['Float64', 'String']),
-                      ('std_srvs.srv', ['Trigger', 'SetBool'])]:
+                      ('std_srvs.srv', ['Trigger', 'SetBool']), ('rcl_interfaces.msg', ['SetParametersResult'])]:
     for name in names:
         setattr(sys.modules[module], name, Message)
 from cartpole_hardware.node import Cartpole, DEFAULTS
+from cartpole_hardware.hybrid import PoleObserver
 from cartpole_hardware.serial_io import Motor
 from cartpole_hardware.analyze import analyze
 
@@ -57,7 +58,7 @@ def rig():
     n.p = dict(DEFAULTS, hardware_configured=True)
     n.geo = Geometry(.04, 1, 3000, 1)
     n.lock = threading.Lock()
-    n.sensor_error = ''
+    n.sensor_error = n.limit_latched = ''
     n.sensor = (time.monotonic(), (1, 10000, 0, False, False, 1, 0))
     n.motor = FakeMotor()
     n.enabled = True
@@ -72,6 +73,11 @@ def rig():
     n.command_time = time.monotonic()
     n.last_loop = time.monotonic() - .02
     n.last_pole = None
+    n.hybrid = None
+    n.hybrid_trial_id = 0
+    n.hybrid_observer = PoleObserver()
+    n.home_left_seen = n.home_left_released = False
+    n.home_reference = 0.0
     n.home_start = time.monotonic()
     n.pub = types.SimpleNamespace(publish=lambda m: None)
     n.telemetry = types.SimpleNamespace(publish=lambda m: None)
@@ -127,17 +133,37 @@ class ControlTests(unittest.TestCase):
         self.assertFalse(n.enabled)
         self.assertIn('command timeout', n.fault)
 
+    def test_velocity_topic_to_signed_serial_rpm(self):
+        n = rig()
+        n.geo = Geometry(.04, 9.7, 3000, 1)
+        n.motor.pos = round(.0735 / n.geo.position(1))
+        n.p.update(max_velocity_m_s=.1, max_motor_rpm=1500, max_acceleration_m_s2=1.0)
+        drive = object.__new__(Motor)
+        frames = []
+        drive.io = types.SimpleNamespace(write=frames.append, read_until=lambda *args: b'OK\r\n')
+        n.motor.velocity = drive.velocity
+        for velocity, frame in ((.012, b'V175\r'), (-.012, b'V-175\r')):
+            n.on_velocity(Message(data=velocity))
+            n.last_loop = time.monotonic() - .025
+            n.tick()
+            self.assertEqual(frames[-1], frame)
+
     def test_homing_contact_stops_before_reversal(self):
         n = rig()
         n.mode = 'home_seek'
         n.output = -.01
         n.sensor = (time.monotonic(), (2, 20000, 0, True, False, 1, 0))
         n.tick()
-        self.assertEqual(n.mode, 'home_backoff')
+        self.assertEqual(n.mode, 'home_stopping')
         self.assertEqual(n.output, 0)
-        self.assertEqual(n.x, 0)
-        n.motor.pos += 3000
+        for _ in range(3):
+            n.tick()
+        self.assertEqual(n.mode, 'home_backoff')
+        n.motor.pos += 75  # release 1 mm from contact
         n.sensor = (time.monotonic(), (3, 30000, 0, False, False, 1, 0))
+        n.tick()
+        self.assertEqual(n.x, 0)
+        n.motor.pos += 2325  # travel another 31 mm into the valid range
         n.tick()
         self.assertTrue(n.homed)
         self.assertFalse(n.enabled)
@@ -187,14 +213,20 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(writes[-1], b'V0\r')
 
 
-    def test_stop_waits_for_three_stationary_readings_before_disable(self):
+    def test_stop_verifies_stationary_window_before_disable(self):
         m = object.__new__(Motor)
         commands = []
-        readings = iter([100, 2, 30, 1, 0, 0])
+        clock = [0.0]
+        def advance(seconds):
+            clock[0] += seconds
         m.command = commands.append
-        m.number = lambda command: next(readings)
+        m.number = lambda command: 250 if command == 'POS' else 0
         m.emergency_zero = lambda: commands.append('EMERGENCY_ZERO')
-        self.assertTrue(m.stop(timeout=1.0))
+        with (patch('time.monotonic', side_effect=lambda: clock[0]),
+              patch('time.monotonic_ns', side_effect=lambda: round(clock[0] * 1e9)),
+              patch('time.sleep', side_effect=advance)):
+            self.assertTrue(m.stop(timeout=1.0))
+        self.assertGreaterEqual(round(clock[0] * 1e9), 60_000_000)
         self.assertEqual(commands, ['V0', 'DI'])
 
     def test_stop_failure_never_disables_drive(self):
